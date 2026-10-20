@@ -1,0 +1,1111 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>手势控制 3D 粒子 · 瘦鱼</title>
+  <!-- 内联 SVG favicon -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230a0e1a'/%3E%3Ccircle cx='20' cy='24' r='3' fill='%238ab4f8'/%3E%3Ccircle cx='40' cy='32' r='4' fill='%23b388ff'/%3E%3Ccircle cx='32' cy='44' r='2' fill='%237c4dff'/%3E%3C/svg%3E" />
+  <!-- 已移除 Tailwind CSS v3：页面样式全部是内联 style / <style>，没有任何 Tailwind 类名，
+       保留它只会多一次网络请求（失败时还会在控制台留下报错）。 -->
+  <!-- Three.js 3D 渲染引擎（r128 稳定 UMD 版，全局 THREE 可用） -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <!-- MediaPipe Hands 手势识别 -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #0a0e1a;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    /* Three.js 画布铺满全屏 */
+    #threeCanvas {
+      position: fixed; inset: 0; z-index: 1;
+      display: block;
+    }
+    /* 右下角小尺寸镜像摄像头预览 */
+    #webcamPreview {
+      position: fixed;
+      /* 原先在右下角，会和造型切换按钮叠在一起，改到左下角 */
+      left: 16px; bottom: 16px;
+      width: 120px; height: 90px;
+      object-fit: cover;
+      transform: scaleX(-1); /* 镜像 */
+      opacity: 0.2;         /* 极低透明度，不抢主体 */
+      border-radius: 8px;
+      z-index: 10;
+      pointer-events: none;
+    }
+    /* 顶部提示条 */
+    .hint-bar {
+      position: fixed;
+      top: 16px; left: 50%;
+      transform: translateX(-50%);
+      z-index: 10;
+      background: rgba(10, 14, 26, 0.5);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      padding: 8px 20px;
+      border-radius: 20px;
+      color: rgba(255,255,255,0.85);
+      font-size: 13px;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    /* 状态指示灯 */
+    .status-dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    .dot-green { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+    .dot-red   { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+    .dot-yellow{ background: #f59e0b; box-shadow: 0 0 6px #f59e0b; }
+  </style>
+</head>
+<body>
+
+  <!-- Three.js 3D 粒子画布 -->
+  <canvas id="threeCanvas"></canvas>
+
+  <!-- 右下角低透明度摄像头预览 -->
+  <video id="webcamPreview" autoplay muted playsinline></video>
+
+  <!-- 造型切换按钮组 -->
+  <div style="
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    gap: 8px;
+    z-index: 100;
+  ">
+    <button id="btn0" style="
+      padding: 8px 12px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: rgba(255,255,255,0.9);
+      font-size: 13px;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+    ">镓榆</button>
+    <button id="btn1" style="
+      padding: 8px 12px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: rgba(255,255,255,0.9);
+      font-size: 13px;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+    ">玫瑰</button>
+    <button id="btn2" style="
+      padding: 8px 12px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: rgba(255,255,255,0.9);
+      font-size: 13px;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+    ">花树</button>
+    <button id="btn3" style="
+      padding: 8px 12px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: rgba(255,255,255,0.9);
+      font-size: 13px;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+    ">爱心</button>
+  </div>
+
+  <!-- 顶部极简提示条 -->
+  <div class="hint-bar">
+    <span id="statusDot" class="status-dot dot-yellow"></span>
+    <span id="statusText">初始化中…</span>
+    <span style="margin: 0 10px; opacity: 0.4;">|</span>
+    张开手·散开星尘 <span style="opacity:0.4;">|</span> 捏合·凝聚造型 <span style="opacity:0.4;">|</span> 右下角按钮·手动切换
+  </div>
+
+<script>
+/* ============================================================
+ * 手势控制 3D 粒子 — 捏合聚成"镓榆"汉字
+ * 技术栈：Three.js + MediaPipe Hands + requestAnimationFrame
+ * ============================================================ */
+
+/* ---------- 可调参数（方便后续修改） ---------- */
+const CONFIG = {
+  // 粒子数量（提高密度，让树更宏大细致）
+  particleCountDesktop: 8000,  // 桌面端粒子数
+  particleCountMobile: 4000,    // 移动端粒子数
+  // 大小层级比例：微小 75% / 中等 20% / 高亮 5%
+  sizeTier: { small: 0.75, medium: 0.20, large: 0.05 },
+  // 粒子颜色（全粉色系：柔粉、玫瑰红、浅粉、粉紫）
+  colors: [0xf8bbd9, 0xe53980, 0xffd6e8, 0xf48fb1, 0xff8fb3],
+  // 玫瑰造型专用暖色调色板（与主色统一，保留字段兼容）
+  roseColors: [0xf8bbd9, 0xe53980, 0xffd6e8, 0xf48fb1],
+  // 文字内容（离屏 canvas 采样生成点云）
+  textContent: '镓榆',
+  // 物理参数
+  springStiffness: 0.04,   // 汇聚弹性系数
+  damping: 0.88,           // 速度阻尼
+  rotationDamping: 0.95,   // 旋转惯性阻尼
+  repelRadius: 1.2,        // 手掌斥力作用半径（3D 空间单位）
+  repelStrength: 0.08,     // 斥力强度
+  // 爱心造型的中心半厚度（世界单位）：越大越"鼓"，越小越接近薄片。
+  // 爱心总高约 3.0，0.62 对应最厚处约 1.24，已经相当饱满。
+  heartThickness: 0.62,
+  // 爱心表面贴合比例：0 表示纯体积填充，越大越多粒子贴在前后表面（轮廓更实）
+  heartSurfaceBias: 0.35,
+  // 玫瑰花瓣宽度总缩放：越大花瓣越宽、越互相重叠（1.0 以下会变成放射状的细瓣）
+  roseHalfScale: 1.3,
+  // 玫瑰整体前倾角（弧度）：花轴竖直时正面只能看到花的侧面，前倾才能看到花心
+  roseTilt: 0.75,
+};
+
+/* ---------- 1. Three.js 场景初始化 ---------- */
+const canvas = document.getElementById('threeCanvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+// 拖尾效果：不清屏，每帧用半透明深色覆盖
+renderer.autoClearColor = false;
+
+const scene = new THREE.Scene();
+// 背景色不用 scene.background：渲染器关闭了自动清屏（autoClearColor = false），
+// 每帧靠半透明的 setClearColor 画拖尾，scene.background 根本不会参与绘制。
+// 下面两个颜色是拖尾清屏色，随造型在冷 / 暖之间插值（见动画循环）。
+const CLEAR_COLOR_COOL = new THREE.Color(0x1a0a14);
+const CLEAR_COLOR_WARM = new THREE.Color(0x2a1220);
+const clearColorTmp = new THREE.Color();
+
+const camera3D = new THREE.PerspectiveCamera(
+  60, window.innerWidth / window.innerHeight, 0.1, 100
+);
+camera3D.position.z = 4; // 拉近相机，增强透视近大远小效果
+
+/* ---------- 2. 判断设备，计算粒子数量 ---------- */
+const isMobile = window.innerWidth < 768 || /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+const TOTAL_COUNT = isMobile ? CONFIG.particleCountMobile : CONFIG.particleCountDesktop;
+
+// 按比例分配到三个大小层级
+const countSmall  = Math.floor(TOTAL_COUNT * CONFIG.sizeTier.small);
+const countMedium = Math.floor(TOTAL_COUNT * CONFIG.sizeTier.medium);
+const countLarge  = TOTAL_COUNT - countSmall - countMedium; // 取整补偿
+
+/* ---------- 3. 离屏 Canvas 采样汉字像素点 ---------- */
+/**
+ * 绘制汉字到离屏 canvas，遍历像素收集不透明点坐标
+ * 返回归一化到 [-1.5, 1.5] 范围的 2D 平面点云（z=0，字形更清晰）
+ */
+function sampleTextPoints(text, totalPoints) {
+  const offCanvas = document.createElement('canvas');
+  const offCtx = offCanvas.getContext('2d');
+  // 离屏画布尺寸：宽 600，高 300（更大画布让字更清晰）
+  offCanvas.width = 600;
+  offCanvas.height = 300;
+  offCtx.fillStyle = '#fff';
+  // 加大字号到 220px，加粗，让笔画更粗更明显
+  offCtx.font = '900 220px "PingFang SC", "Microsoft YaHei", "Heiti SC", sans-serif';
+  offCtx.textAlign = 'center';
+  offCtx.textBaseline = 'middle';
+  offCtx.fillText(text, 300, 155);
+
+  // 读取像素数据
+  const imgData = offCtx.getImageData(0, 0, 600, 300).data;
+  const points = [];
+  for (let y = 0; y < 300; y++) {
+    for (let x = 0; x < 600; x++) {
+      const alpha = imgData[(y * 600 + x) * 4 + 3];
+      // 降低阈值，让更多边缘像素被采样，笔画更饱满
+      if (alpha > 80) {
+        // 转换为 3D 坐标：x → [-1.8, 1.8]，y → [-0.9, 0.9]
+        const nx = (x / 600 - 0.5) * 3.6;
+        const ny = -(y / 300 - 0.5) * 1.8; // y 翻转
+        points.push({ x: nx, y: ny, z: 0 });
+      }
+    }
+  }
+
+  // 兜底：万一字体或编码异常导致一个点都没采到，直接返回随机点。
+  // 否则下面的 Math.random() * 0 会取到 undefined，访问 .x 时抛异常。
+  if (points.length === 0) {
+    const fallback = [];
+    for (let i = 0; i < totalPoints; i++) {
+      fallback.push(new THREE.Vector3((Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, 0));
+    }
+    return fallback;
+  }
+
+  // 从所有采样点中随机抽取 totalPoints 个
+  const result = [];
+  for (let i = 0; i < totalPoints; i++) {
+    const idx = Math.floor(Math.random() * points.length);
+    const p = points[idx];
+    // 2D 平面字体：z 全部为 0，不再有厚度，字形更清晰
+    result.push(new THREE.Vector3(p.x, p.y, 0));
+  }
+  return result;
+}
+
+// 采样文字点云
+const textPoints = sampleTextPoints(CONFIG.textContent, TOTAL_COUNT);
+
+/**
+ * 造型1：多层花瓣花（玫瑰式花冠）
+ *
+ * 前面几版失败的原因：花瓣被做成"环形扇区"，相邻花瓣首尾相接，
+ * 拼起来必然变成一个连续圆盘，怎么调都不像花。
+ *
+ * 这一版改用最容易被认成"花"的图形语言：
+ *   1. 一个明显的花心（致密小丘）
+ *   2. 三圈**彼此独立**的花瓣，每片是单独的泪滴形，瓣与瓣之间留空隙
+ *   3. 外圈花瓣长而平，内圈花瓣短而向前翘起，形成层次和立体感
+ *
+ * 每片花瓣在自己的局部坐标里采样：
+ *   u ∈ [0,1] 沿花瓣轴向（根部→尖端）
+ *   v ∈ [-1,1] 垂直花瓣轴向
+ */
+function sampleRosePoints(totalPoints) {
+  const points = [];
+
+  /* ===== 1. 花心：致密小丘 ===== */
+  const centerCount = Math.floor(totalPoints * 0.16);
+  for (let i = 0; i < centerCount; i++) {
+    const rr = 0.17 * Math.sqrt(Math.random());
+    const ang = Math.random() * Math.PI * 2;
+    // 中间高、边缘低的小丘
+    const z = 0.20 * Math.sqrt(Math.max(0, 1 - (rr / 0.17) * (rr / 0.17)));
+    points.push(new THREE.Vector3(
+      Math.cos(ang) * rr,
+      Math.sin(ang) * rr,
+      z + (Math.random() - 0.5) * 0.015
+    ));
+  }
+
+  /* ===== 2. 三圈花瓣 =====
+   * n 片数 / Rb 根部半径 / L 长度 / W 半宽 / z0 抬起高度 / ph 相位
+   */
+  const RINGS = [
+    { n: 12, Rb: 0.30, L: 0.66, W: 0.20, z0: 0.00, tz: -0.12, ph: 0.00 }, // 外圈：长而平，尖端略后仰
+    { n: 10, Rb: 0.21, L: 0.50, W: 0.17, z0: 0.09, tz: 0.06, ph: 0.31 },  // 中圈
+    { n: 8,  Rb: 0.13, L: 0.34, W: 0.13, z0: 0.17, tz: 0.16, ph: 0.62 },  // 内圈：短而向前翘
+  ];
+
+  const totalPetals = RINGS.reduce((a, R) => a + R.n, 0);
+  const petalBudget = totalPoints - centerCount;
+  const perPetal = Math.floor(petalBudget / totalPetals);
+
+  for (const ring of RINGS) {
+    for (let p = 0; p < ring.n; p++) {
+      const theta = (p / ring.n) * Math.PI * 2 + ring.ph;
+
+      // 花瓣轴向与垂直方向
+      const ax = Math.cos(theta), ay = Math.sin(theta);
+      const px = -Math.sin(theta), py = Math.cos(theta);
+
+      // 每片的个体差异
+      const L = ring.L * (0.92 + Math.random() * 0.16);
+      const W = ring.W * (0.92 + Math.random() * 0.16);
+
+      // 根部位置
+      const bx = ax * ring.Rb;
+      const by = ay * ring.Rb;
+
+      for (let i = 0; i < perPetal; i++) {
+        const u = Math.random();
+        const v = Math.random() * 2 - 1;
+
+        // 宽度轮廓：根部窄、中段宽、尖端圆钝（不收成尖）
+        const w = Math.pow(Math.sin(Math.PI * Math.pow(u, 0.62)), 0.45);
+
+        // 沿花瓣轴向伸展，横向按宽度展开
+        const x = bx + ax * (L * u) + px * (W * w * v);
+        const y = by + ay * (L * u) + py * (W * w * v);
+
+        // 深度：整圈抬起 + 沿花瓣轴向的倾斜 + 少量抖动
+        const z = ring.z0
+                + ring.tz * u
+                + (Math.random() - 0.5) * 0.015;
+
+        points.push(new THREE.Vector3(x, y, z));
+      }
+    }
+  }
+
+  return points;
+}
+
+/**
+ * 【当前未启用】纤细弯月轮廓 + 5 颗小五角星。
+ * 这个函数本身是完整可用的，只是没接进 shapes 数组，所以页面上看不到。
+ * 想启用：把它加进 shapes，并在 SHAPE_NAMES 和右下角按钮里各补一项即可。
+ */
+function sampleMoonPoints(totalPoints) {
+  const points = [];
+  // --- 弯月：外圆减去内圆（两个圆的差集） ---
+  const moonPointCount = Math.floor(totalPoints * 0.8); // 80% 粒子在弯月
+  const outer = { cx: -0.8, cy: 0, r: 1.0 };
+  const inner = { cx: -0.5, cy: 0.15, r: 0.85 };
+  let attempts = 0;
+  while (points.length < moonPointCount && attempts < moonPointCount * 5) {
+    attempts++;
+    // 在弯月的包围盒内随机取点
+    const x = outer.cx + (Math.random() - 0.5) * 2 * outer.r;
+    const y = outer.cy + (Math.random() - 0.5) * 2 * outer.r;
+    // 在外圆内但不在内圆内
+    const dOuter = Math.sqrt((x - outer.cx) ** 2 + (y - outer.cy) ** 2);
+    const dInner = Math.sqrt((x - inner.cx) ** 2 + (y - inner.cy) ** 2);
+    if (dOuter < outer.r && dInner > inner.r) {
+      points.push(new THREE.Vector3(x, y, 0));
+    }
+  }
+  // --- 5颗小五角星 ---
+  const starPointCount = totalPoints - points.length; // 剩余粒子分给星星
+  const starPositions = [
+    { x: 0.8, y: 0.8, size: 0.12 },
+    { x: 1.5, y: 0.3, size: 0.09 },
+    { x: 1.2, y: -0.5, size: 0.10 },
+    { x: 0.5, y: -0.9, size: 0.08 },
+    { x: 1.8, y: -0.8, size: 0.07 },
+  ];
+  const perStar = Math.floor(starPointCount / starPositions.length);
+  for (let s = 0; s < starPositions.length; s++) {
+    const star = starPositions[s];
+    // 五角星边缘采样
+    for (let i = 0; i < perStar; i++) {
+      // 五角星用极坐标生成：5个尖角 + 5个凹点
+      const angle = Math.random() * Math.PI * 2;
+      // 简化：用小圆近似五角星（剪影感）
+      const radius = Math.sqrt(Math.random()) * star.size;
+      const x = star.x + Math.cos(angle) * radius;
+      const y = star.y + Math.sin(angle) * radius;
+      points.push(new THREE.Vector3(x, y, 0));
+    }
+  }
+  return points;
+}
+
+﻿/**
+ * 造型2：樱花树与落英
+ *
+ * 上一版把树冠做成心形，和第四个造型（立体爱心）撞了，这里换掉。
+ *
+ * 这一版不做符号，专心把一棵树画好：
+ *   1. 树干用二次贝塞尔曲线，带自然的弯曲，从地面收到树冠里；
+ *   2. 树冠是二十来个高斯花团拼的，分成上中下三层、大小递减，
+ *      边缘用高斯自然稀疏，形成蓬松但不散的花云；
+ *   3. 树下有一片花海，中间还夹着成串的"落英"，像正被风吹落。
+ *
+ * 坐标：x 横向、y 纵向（上为正）、z 深度（正 z 朝向观察者）。
+ */
+function sampleTreePoints(totalPoints) {
+  const points = [];
+  const push = (x, y, z) => points.push(new THREE.Vector3(x, y, z));
+
+  function gauss() {
+    const u1 = Math.random() + 1e-9;
+    const u2 = Math.random();
+    const g = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    return Math.max(-2, Math.min(2, g));
+  }
+
+  /* ================= 顶部分配 ================= */
+  // 去掉背景散点后，把粒子全部集中到树冠和树体上，让树冠更茂密
+  const nCanopy = Math.floor(totalPoints * 0.72);
+  const nBranch = Math.floor(totalPoints * 0.13);
+  const nMeadow = totalPoints - nCanopy - nBranch;
+
+  /* ================= 1. 树干与枝（贝塞尔曲线） ================= */
+  const segments = [];
+
+  // 二次贝塞尔采样成小段，每段带粗细
+  function curve(p0, p1, p2, steps, w0, w1) {
+    let prev = p0;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const mt = 1 - t;
+      const x = mt * mt * p0.x + 2 * mt * t * p1.x + t * t * p2.x;
+      const y = mt * mt * p0.y + 2 * mt * t * p1.y + t * t * p2.y;
+      const wa = w0 + (w1 - w0) * ((i - 1) / steps);
+      const wb = w0 + (w1 - w0) * (i / steps);
+      segments.push({ x1: prev.x, y1: prev.y, x2: x, y2: y, w1: wa, w2: wb });
+      prev = { x, y };
+    }
+    return prev;
+  }
+
+  const BASE_Y = -2.05;
+  // 主干：向右上轻轻弯过去
+  const top = curve({ x: -0.08, y: BASE_Y }, { x: -0.34, y: -1.15 }, { x: 0.10, y: -0.42 }, 10, 0.19, 0.10);
+  // 三根主枝：左右各一根、再加一根向上
+  curve({ x: top.x, y: top.y }, { x: -0.55, y: -0.10 }, { x: -0.98, y: 0.30 }, 6, 0.09, 0.03);
+  curve({ x: top.x, y: top.y }, { x: 0.60, y: -0.05 }, { x: 0.95, y: 0.38 }, 6, 0.09, 0.03);
+  curve({ x: top.x, y: top.y }, { x: 0.12, y: 0.20 }, { x: 0.02, y: 0.72 }, 6, 0.08, 0.03);
+  // 两根侧枝，填满树冠中段
+  curve({ x: top.x, y: top.y }, { x: -0.20, y: 0.25 }, { x: -0.55, y: 0.78 }, 5, 0.06, 0.02);
+  curve({ x: top.x, y: top.y }, { x: 0.35, y: 0.28 }, { x: 0.72, y: 0.80 }, 5, 0.06, 0.02);
+
+  for (let i = 0; i < nBranch; i++) {
+    const s = segments[Math.floor(Math.random() * segments.length)];
+    const t = Math.random();
+    const w = s.w1 + (s.w2 - s.w1) * t;
+    const a = Math.random() * Math.PI * 2;
+    const r = w * Math.sqrt(Math.random());
+    push(s.x1 + (s.x2 - s.x1) * t + Math.cos(a) * r,
+         s.y1 + (s.y2 - s.y1) * t + Math.sin(a) * r * 0.8,
+         Math.sin(a) * r * 0.7);
+  }
+
+  /* ================= 2. 树冠：分层的花团 ================= */
+  // 三层：下宽上窄，让树冠有体积和层次
+  const tiers = [
+    { cy: 0.30, rx: 1.52, ry: 0.34, n: 16, r0: 0.19, r1: 0.30 },
+    { cy: 0.84, rx: 1.24, ry: 0.30, n: 13, r0: 0.17, r1: 0.27 },
+    { cy: 1.28, rx: 0.82, ry: 0.26, n: 10, r0: 0.14, r1: 0.22 },
+  ];
+  const lobes = [];
+  for (const tier of tiers) {
+    for (let i = 0; i < tier.n; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const rad = Math.pow(Math.random(), 0.55);
+      lobes.push({
+        x: Math.cos(ang) * rad * tier.rx,
+        y: tier.cy + Math.sin(ang) * rad * tier.ry,
+        z: (Math.random() - 0.5) * 0.62,
+        r: tier.r0 + Math.random() * (tier.r1 - tier.r0),
+      });
+    }
+  }
+
+  for (let i = 0; i < nCanopy; i++) {
+    const L = lobes[Math.floor(Math.random() * lobes.length)];
+    push(L.x + gauss() * L.r * 0.60,
+         L.y + gauss() * L.r * 0.52,
+         L.z + gauss() * L.r * 0.42);
+  }
+
+  /* ================= 3. 地面花海 ================= */
+  for (let i = 0; i < nMeadow; i++) {
+    let x;
+    do { x = (Math.random() * 2 - 1) * 3.15; }
+    while (Math.random() > (1 - 0.60 * Math.pow(Math.abs(x) / 3.15, 2)));
+
+    // 树根周围微微隆起
+    const topY = -1.94 + 0.30 * Math.exp(-(x * x) / 3.4);
+    const y = -2.30 + Math.random() * (topY + 2.30);
+
+    const clumpR = 0.07 + Math.random() * 0.15;
+    const a = Math.random() * Math.PI * 2;
+    const r = clumpR * Math.sqrt(Math.random());
+    push(x + Math.cos(a) * r, y + Math.sin(a) * r * 0.40,
+         0.25 + Math.random() * 0.55);
+  }
+
+  /* ================= 6. 收进画面 =================
+   * 按页面真实相机参数（fov 60、相机 z=4、宽高比 1414/760）做投影检查，
+   * 超出就整体等比缩小，保证完整入画。
+   */
+  const TAN_HALF = Math.tan((60 * Math.PI) / 360);
+  const CAM_Z = 4;
+  const ASPECT = 1414 / 760;
+  let maxNdc = 0;
+  for (const q of points) {
+    const d = CAM_Z - q.z;
+    if (d <= 0.2) continue;
+    const ndc = Math.max(
+      Math.abs(q.y / (TAN_HALF * d)),
+      Math.abs(q.x / (TAN_HALF * d * ASPECT))
+    );
+    if (ndc > maxNdc) maxNdc = ndc;
+  }
+  if (maxNdc > 0.92) {
+    const k = 0.92 / maxNdc;
+    for (const q of points) { q.x *= k; q.y *= k; q.z *= k; }
+  }
+
+  return points;
+}
+
+/* ---------- 3.5 生成饱满立体爱心点云 ---------- */
+/**
+ * 造型3：立体爱心（枕形，有厚度变化）
+ *
+ * 旧做法是"2D 心形里撒点 + 一个几乎均匀的随机 z"，本质上是一块平板。
+ * 新做法分三步：
+ *   1. 用参数方程取心形外轮廓 —— 保证正面看仍是标准心形；
+ *   2. 心形相对中心是"星形"的（任意方向只穿过边界一次），
+ *      于是内部任一点都可以写成 center + s * (轮廓点 - center)，s ∈ [0, 1]：
+ *      s=0 是中心，s=1 是轮廓，天然铺满整个内部；
+ *   3. 该处的半厚度取 H * sqrt(1 - s²) ——
+ *      中心最厚、向边缘平滑收敛到 0，形成真正的立体枕形，而不是等厚薄片。
+ *
+ * 这样从侧面看是饱满的曲面，旋转起来才有体积感。
+ */
+function sampleHeartPoints(totalPoints) {
+  const points = [];
+
+  /* --- 1. 取外轮廓，并归一化到"以包围盒中心为原点、高度约 3.0" --- */
+  const SEGMENTS = 2048;
+  const raw = [];
+  for (let i = 0; i < SEGMENTS; i++) {
+    const t = (i / SEGMENTS) * Math.PI * 2;
+    raw.push({
+      x: 16 * Math.pow(Math.sin(t), 3),
+      y: 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t),
+    });
+  }
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const q of raw) {
+    if (q.x < minX) minX = q.x;
+    if (q.x > maxX) maxX = q.x;
+    if (q.y < minY) minY = q.y;
+    if (q.y > maxY) maxY = q.y;
+  }
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const scale = 3.0 / (maxY - minY); // 爱心总高固定为 3.0
+  // 横向略微加宽（1.06），视觉上更饱满，不会有"瘦高"感
+  const outline = raw.map((q) => ({
+    x: (q.x - cx) * scale * 1.06,
+    y: (q.y - cy) * scale,
+  }));
+
+  /*
+   * 建立"角度 → 半径"查找表。
+   * 心形相对中心是星形的，所以任意方向只对应一个边界半径，
+   * 采样时只要拿到 r(θ)，就能沿该方向按比例 s 铺满内部。
+   */
+  const polar = outline
+    .map((q) => ({ a: Math.atan2(q.y, q.x), r: Math.hypot(q.x, q.y) }))
+    .sort((p, q) => p.a - q.a);
+  const angles = polar.map((p) => p.a);
+  const radii = polar.map((p) => p.r);
+  const aMin = angles[0];
+  const aMax = angles[angles.length - 1];
+  const maxR = Math.max(...radii);
+
+  function radiusAtAngle(a) {
+    let x = a;
+    while (x < aMin) x += Math.PI * 2;
+    while (x >= aMin + Math.PI * 2) x -= Math.PI * 2;
+
+    // 落在最后一段与首段之间（跨越 ±π 的接缝）
+    if (x >= aMax) {
+      const f = (x - aMax) / (aMin + Math.PI * 2 - aMax || 1e-9);
+      return radii[radii.length - 1] + (radii[0] - radii[radii.length - 1]) * f;
+    }
+    let lo = 0;
+    let hi = angles.length - 1;
+    while (lo < hi - 1) {
+      const mid = (lo + hi) >> 1;
+      if (angles[mid] <= x) lo = mid; else hi = mid;
+    }
+    const f = (x - angles[lo]) / (angles[lo + 1] - angles[lo] || 1e-9);
+    return radii[lo] + (radii[lo + 1] - radii[lo]) * f;
+  }
+
+  /* --- 2. 逐点采样 --- */
+  const halfMax = CONFIG.heartThickness;   // 中心处的半厚度
+  const surfaceBias = CONFIG.heartSurfaceBias; // 贴表面的比例
+
+  for (let i = 0; i < totalPoints; i++) {
+    /*
+     * 方向按 r² 加权（拒斥采样）：
+     * 若方向按角度均匀取，而该方向内部面积 ∝ r²，
+     * 那么半径短的方向（正上方的凹口）点密度会偏高，正面就会叠出一条竖带。
+     * 用概率 (r/maxR)² 接受，才能得到真正面积均匀的分布。
+     */
+    let theta = 0;
+    let r = 0;
+    for (let k = 0; k < 64; k++) {
+      theta = Math.random() * Math.PI * 2;
+      r = radiusAtAngle(theta);
+      if (Math.random() <= (r / maxR) * (r / maxR)) break;
+    }
+
+    // s ∈ [0,1]：中心 → 轮廓的相对位置（sqrt 使点沿半径方向面积均匀）
+    const s = Math.sqrt(Math.random());
+
+    const x = Math.cos(theta) * r * s;
+    const y = Math.sin(theta) * r * s;
+
+    // 该处的半厚度：中心最厚，边缘收敛到 0
+    const half = halfMax * Math.sqrt(1 - s * s);
+
+    // z：一部分贴前后表面（让立体轮廓更清晰），其余在体积内随机
+    let z;
+    if (Math.random() < surfaceBias) {
+      const sign = Math.random() < 0.5 ? -1 : 1;
+      z = sign * half * (0.86 + Math.random() * 0.14);
+    } else {
+      z = (Math.random() * 2 - 1) * half;
+    }
+
+    points.push(new THREE.Vector3(x, y, z));
+  }
+
+  return points;
+}
+
+/**
+ * 把造型点云补齐 / 裁剪到恰好 totalPoints 个。
+ * 原因：玫瑰、花树等函数用 Math.floor 划分点数，余数被丢掉（8000 点时花树只有 7994 个），
+ * 而 switchToShape 是按 TOTAL_COUNT 的索引取点的，越界会取到 undefined，
+ * 导致 .copy() 抛 TypeError、造型切换中断。
+ */
+function normalizeShapePoints(pointsArr, totalPoints) {
+  if (pointsArr.length >= totalPoints) return pointsArr.slice(0, totalPoints);
+  const out = pointsArr.slice();
+  while (out.length < totalPoints) {
+    const src = pointsArr[Math.floor(Math.random() * pointsArr.length)];
+    out.push(src.clone());
+  }
+  return out;
+}
+
+// 四个造型的点云数组（造型0=镓榆文字, 造型1=玫瑰花束, 造型2=古老花树, 造型3=立体爱心）
+// 统一补齐到 TOTAL_COUNT，避免切换造型时索引越界
+const shapes = [
+  textPoints,
+  sampleRosePoints(TOTAL_COUNT),
+  sampleTreePoints(TOTAL_COUNT),
+  sampleHeartPoints(TOTAL_COUNT),
+].map((arr) => normalizeShapePoints(arr, TOTAL_COUNT));
+const SHAPE_NAMES = ['镓榆文字', '玫瑰花束', '古老花树', '立体爱心'];
+
+/* ---------- 4. 生成粒子数据 ---------- */
+// 每个粒子：星空位置(home) + 文字位置(text) + 当前速度 + 基础漂浮参数
+const particles = [];
+for (let i = 0; i < TOTAL_COUNT; i++) {
+  // 星空位置：在一个大范围空间内随机分布
+  const home = new THREE.Vector3(
+    (Math.random() - 0.5) * 12,
+    (Math.random() - 0.5) * 8,
+    (Math.random() - 0.5) * 6
+  );
+  // 文字位置：从第一个造型（镓榆文字）的采样点中取（用 clone 复制，避免直接引用导致 shapes 被修改）
+  const text = shapes[0][i].clone();
+  // 随机颜色（粉色系，取自 CONFIG.colors）
+  const colorHex = CONFIG.colors[Math.floor(Math.random() * CONFIG.colors.length)];
+  const color = new THREE.Color(colorHex);
+  // 对应的玫瑰暖色调（用于玫瑰造型时颜色过渡）
+  const roseColorHex = CONFIG.roseColors[Math.floor(Math.random() * CONFIG.roseColors.length)];
+  const roseColor = new THREE.Color(roseColorHex);
+  // 呼吸闪烁参数
+  const breathePhase = Math.random() * Math.PI * 2;
+  const breatheSpeed = 0.5 + Math.random() * 1.0;
+
+  particles.push({
+    home: home,
+    text: text,
+    pos: home.clone(),   // 当前位置，初始在星空
+    vel: new THREE.Vector3(), // 当前速度
+    color: color,        // 主色（粉色系）
+    roseColor: roseColor, // 暖玫瑰色
+    sizeTier: i < countSmall ? 'small' : (i < countSmall + countMedium ? 'medium' : 'large'),
+    breathePhase: breathePhase,
+    breatheSpeed: breatheSpeed,
+  });
+}
+
+/* ---------- 5. 创建圆形光点纹理 ---------- */
+/**
+ * 生成一个径向渐变的圆形纹理，让粒子渲染为柔和的光点而非方块
+ */
+function createGlowTexture() {
+  const size = 64;
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  const gradient = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+  gradient.addColorStop(0, 'rgba(255,255,255,1)');
+  gradient.addColorStop(0.3, 'rgba(255,255,255,0.8)');
+  gradient.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(c);
+}
+const glowTexture = createGlowTexture();
+
+/* ---------- 6. 创建 Three.js Points 对象（按大小层级分组） ---------- */
+function createPoints(count, size, opacity) {
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  const material = new THREE.PointsMaterial({
+    size: size,
+    map: glowTexture,        // 圆形光点纹理
+    vertexColors: true,
+    transparent: true,
+    opacity: opacity,
+    blending: THREE.AdditiveBlending, // 叠加发光效果
+    depthWrite: false,
+    sizeAttenuation: true, // 近大远小
+  });
+
+  return new THREE.Points(geometry, material);
+}
+
+const pointsSmall  = createPoints(countSmall,  0.035, 0.9);
+const pointsMedium = createPoints(countMedium, 0.06,  1.0);
+const pointsLarge  = createPoints(countLarge,  0.11,  1.0);
+
+// 字形整体旋转控制组（捏合时旋转这一组）
+// 注意：三个 Points 只需挂到 textGroup 上，不要再单独 scene.add ——
+// 那样每次 add 都会把它们从原父节点摘下再挂一次，属于多余操作。
+const textGroup = new THREE.Group();
+textGroup.add(pointsSmall, pointsMedium, pointsLarge);
+scene.add(textGroup);
+
+/* ---------- 6. 手势状态 ---------- */
+let isPinched = false;          // 是否捏合
+let handDetected = false;        // 是否检测到手
+let lastHandDetectedTime = 0;   // 最后一次收到手势检测结果的时间戳
+let palmX = 0, palmY = 0;        // 手掌归一化坐标 [-1, 1]
+let handSize = 0.2;              // 手的大小（手腕到中指根距离，用于判断远近）
+let recognitionEnabled = true;
+
+// 目标旋转角（由手掌位置控制）
+let targetRotY = 0;
+let targetRotX = 0;
+// 当前旋转角（带惯性）
+let currentRotY = 0;
+let currentRotX = 0;
+let velRotY = 0;
+let velRotX = 0;
+// 字形缩放
+let targetScale = 1.0;
+let currentScale = 1.0;
+
+// 汇聚进度：0 = 完全散开（星空），1 = 完全汇聚（造型）
+let morphProgress = 0;
+let morphVelocity = 0;
+
+// --- 造型切换状态 ---
+// 0=镓榆文字, 1=玫瑰花束, 2=古老花树, 3=立体爱心
+let currentShapeIndex = 0;
+// 已删除 shapeSwitchBaselinePalm 与 SHAPE_SWITCH_THRESHOLD：
+// 它们本是"甩手切换造型"用的，该功能后来改成右下角按钮手动切换，这两个变量再没人读取。
+
+// --- 颜色过渡状态 ---
+let colorProgress = 0;            // 0=主色, 1=玫瑰暖色
+let colorVelocity = 0;            // 颜色过渡速度
+
+/* ---------- 7. 动画主循环 ---------- */
+const clock = new THREE.Clock();
+
+/**
+ * 心跳节律：一次心动 = "咚—哒" 两拍。
+ * 用两个高斯脉冲模拟心肌收缩（lub）和瓣膜回弹（dub），
+ * 返回 0~1 的强度。相比 sin 曲线，双脉冲才有真实心跳的顿挫感。
+ * @param {number} t 经过的秒数
+ */
+function heartbeat(t) {
+  const period = 2.40;                 // 一个心动周期，约每分钟 25 次（放慢，显得更沉静）
+  const p = (t % period) / period;     // 归一到 0..1
+  const lub = Math.exp(-Math.pow((p - 0.06) / 0.045, 2));        // 第一拍，强
+  const dub = 0.55 * Math.exp(-Math.pow((p - 0.24) / 0.055, 2)); // 第二拍，弱
+  return Math.min(1, lub + dub);
+}
+
+// UI 元素（提前定义，供 animate 循环使用）
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+
+function animate() {
+  requestAnimationFrame(animate);
+  const elapsed = clock.getElapsedTime();
+
+  // (a) 更新汇聚进度（弹簧物理）
+  const targetMorph = isPinched ? 1 : 0;
+  morphVelocity += (targetMorph - morphProgress) * CONFIG.springStiffness;
+  morphVelocity *= CONFIG.damping;
+  morphProgress += morphVelocity;
+  morphProgress = Math.max(0, Math.min(1, morphProgress));
+
+  // (b) 更新字形旋转（惯性模型，加快响应）
+  velRotY += (targetRotY - currentRotY) * 0.15;
+  velRotY *= CONFIG.rotationDamping;
+  currentRotY += velRotY;
+
+  velRotX += (targetRotX - currentRotX) * 0.15;
+  velRotX *= CONFIG.rotationDamping;
+  currentRotX += velRotX;
+
+  textGroup.rotation.y = currentRotY;
+  textGroup.rotation.x = currentRotX;
+
+  // (c) 字形缩放（手离摄像头远近）
+  currentScale += (targetScale - currentScale) * 0.1;
+
+  // (c1) 颜色过渡：玫瑰造型时 colorProgress→1（暖色），其他造型→0（冷色）
+  const targetColorProgress = (currentShapeIndex === 1 && morphProgress > 0.5) ? 1 : 0;
+  colorVelocity += (targetColorProgress - colorProgress) * 0.02;
+  colorVelocity *= 0.95;
+  colorProgress += colorVelocity;
+  colorProgress = Math.max(0, Math.min(1, colorProgress));
+
+  // (c1b) 造型专属的"呼吸"：玫瑰缓慢呼吸，爱心轻微心跳
+  let breatheScale = 1.0;
+  if (currentShapeIndex === 1 && morphProgress > 0.5) {
+    breatheScale = 1.0 + 0.05 * Math.sin(elapsed * 0.8); // 很慢的呼吸
+  } else if (currentShapeIndex === 3 && morphProgress > 0.5) {
+    // 心跳：lub-dub 双拍，幅度只有 2.2%，是"微微"搏动而不是弹跳
+    breatheScale = 1.0 + 0.022 * heartbeat(elapsed);
+  }
+  textGroup.scale.setScalar(currentScale * breatheScale);
+
+  // (c1c) 背景暖色晕染改到渲染处处理（见文件末尾的 setClearColor），此处不再赋值。
+
+  // (c2) 超时检测：超过 200ms 没收到手势结果 → 认为手移出了画面
+  // （只更新状态，不再自动切换造型，切换统一由右下角手动按钮控制）
+  if (handDetected && Date.now() - lastHandDetectedTime > 200) {
+    handDetected = false;
+    isPinched = false;
+  }
+
+  // (c3) 每帧根据实际状态更新 UI（避免状态卡在旧值）
+  // 状态栏显示：手势状态 + 当前是第几个造型
+  const shapeInfo = `造型${currentShapeIndex + 1}/${SHAPE_NAMES.length}`;
+  if (!handDetected) {
+    statusText.textContent = `未检测到手 · ${shapeInfo}`;
+  } else if (isPinched) {
+    statusText.textContent = `捏合凝聚中 · ${shapeInfo}`;
+  } else {
+    statusText.textContent = `张开手掌 · ${shapeInfo}`;
+  }
+
+  // (d) 更新每个粒子的位置
+  const posSmall  = pointsSmall.geometry.attributes.position.array;
+  const posMedium = pointsMedium.geometry.attributes.position.array;
+  const posLarge  = pointsLarge.geometry.attributes.position.array;
+  const colSmall  = pointsSmall.geometry.attributes.color.array;
+  const colMedium = pointsMedium.geometry.attributes.color.array;
+  const colLarge  = pointsLarge.geometry.attributes.color.array;
+
+  let idxSmall = 0, idxMedium = 0, idxLarge = 0;
+
+  for (let i = 0; i < TOTAL_COUNT; i++) {
+    const p = particles[i];
+
+    // 目标位置：根据 morphProgress 在星空和文字之间插值
+    const targetX = p.home.x + (p.text.x - p.home.x) * morphProgress;
+    const targetY = p.home.y + (p.text.y - p.home.y) * morphProgress;
+    const targetZ = p.home.z + (p.text.z - p.home.z) * morphProgress;
+
+    // 弹簧物理：粒子向目标位置加速
+    p.vel.x += (targetX - p.pos.x) * CONFIG.springStiffness;
+    p.vel.y += (targetY - p.pos.y) * CONFIG.springStiffness;
+    p.vel.z += (targetZ - p.pos.z) * CONFIG.springStiffness;
+
+    // 手掌斥力（仅散开状态生效，模拟搅动手感）
+    if (!isPinched && handDetected && recognitionEnabled) {
+      // 将手掌位置转换到 3D 空间（简单映射到 z=0 平面）
+      const hand3D = new THREE.Vector3(palmX * 3, -palmY * 2, 0);
+      const dx = p.pos.x - hand3D.x;
+      const dy = p.pos.y - hand3D.y;
+      const dz = p.pos.z - hand3D.z;
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+      if (dist < CONFIG.repelRadius && dist > 0.01) {
+        const force = (CONFIG.repelRadius - dist) / CONFIG.repelRadius * CONFIG.repelStrength;
+        p.vel.x += (dx / dist) * force;
+        p.vel.y += (dy / dist) * force;
+        p.vel.z += (dz / dist) * force;
+      }
+    }
+
+    // 阻尼
+    p.vel.multiplyScalar(CONFIG.damping);
+    // 更新位置
+    p.pos.add(p.vel);
+
+    // 呼吸闪烁（调整颜色亮度，整体提亮）
+    const breathe = 0.85 + 0.35 * Math.sin(elapsed * p.breatheSpeed + p.breathePhase);
+
+    // 写入对应层级的数组
+    let arr, colArr, idx;
+    if (p.sizeTier === 'small') { arr = posSmall; colArr = colSmall; idx = idxSmall++; }
+    else if (p.sizeTier === 'medium') { arr = posMedium; colArr = colMedium; idx = idxMedium++; }
+    else { arr = posLarge; colArr = colLarge; idx = idxLarge++; }
+
+    arr[idx * 3]     = p.pos.x;
+    arr[idx * 3 + 1] = p.pos.y;
+    arr[idx * 3 + 2] = p.pos.z;
+
+    // 颜色插值：主色 → 玫瑰暖色（根据 colorProgress 平滑过渡）
+    const cr = p.color.r + (p.roseColor.r - p.color.r) * colorProgress;
+    const cg = p.color.g + (p.roseColor.g - p.color.g) * colorProgress;
+    const cb = p.color.b + (p.roseColor.b - p.color.b) * colorProgress;
+    colArr[idx * 3]     = cr * breathe;
+    colArr[idx * 3 + 1] = cg * breathe;
+    colArr[idx * 3 + 2] = cb * breathe;
+  }
+
+  // 标记更新
+  pointsSmall.geometry.attributes.position.needsUpdate = true;
+  pointsMedium.geometry.attributes.position.needsUpdate = true;
+  pointsLarge.geometry.attributes.position.needsUpdate = true;
+  pointsSmall.geometry.attributes.color.needsUpdate = true;
+  pointsMedium.geometry.attributes.color.needsUpdate = true;
+  pointsLarge.geometry.attributes.color.needsUpdate = true;
+
+  // 拖尾：每帧用半透明深色覆盖（玫瑰造型时透明度更低，拖尾更长更朦胧）
+  const trailOpacity = 0.15 - colorProgress * 0.06; // 0.15 → 0.09
+  clearColorTmp.copy(CLEAR_COLOR_COOL).lerp(CLEAR_COLOR_WARM, colorProgress);
+  renderer.setClearColor(clearColorTmp, trailOpacity);
+  renderer.render(scene, camera3D);
+}
+
+// 初始背景填充
+renderer.setClearColor(0x1a0a14, 1);
+renderer.render(scene, camera3D);
+animate();
+
+/* ---------- 8. 窗口自适应 ---------- */
+window.addEventListener('resize', () => {
+  camera3D.aspect = window.innerWidth / window.innerHeight;
+  camera3D.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+/* ---------- 9. MediaPipe Hands 手势识别 ---------- */
+const videoElement = document.getElementById('webcamPreview');
+
+const PINCH_THRESHOLD = 0.05; // 捏合判定阈值（归一化距离）
+
+function onResults(results) {
+  if (!recognitionEnabled) return;
+
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    handDetected = true;
+    lastHandDetectedTime = Date.now(); // 记录最后一次检测到手的时间
+    const lm = results.multiHandLandmarks[0];
+
+    // 拇指尖(4) 与 食指尖(8) 距离 → 判断捏合
+    const thumb = lm[4];
+    const index = lm[8];
+    const pinchDist = Math.sqrt(
+      Math.pow(thumb.x - index.x, 2) + Math.pow(thumb.y - index.y, 2)
+    );
+
+    // 捏合状态变化检测
+    isPinched = pinchDist < PINCH_THRESHOLD;
+
+    // 手掌位置：用手腕(0)和中指根(9)的中点
+    palmX = (lm[0].x + lm[9].x) / 2;  // [0, 1]
+    palmY = (lm[0].y + lm[9].y) / 2;  // [0, 1]
+
+    // 转换为 [-1, 1] 范围（注意视频是镜像的，x 需要翻转）
+    palmX = (1 - palmX) * 2 - 1;
+    palmY = palmY * 2 - 1;
+
+    // 手的大小：手腕(0)到中指根(9)的距离 → 判断离摄像头远近
+    handSize = Math.sqrt(
+      Math.pow(lm[0].x - lm[9].x, 2) + Math.pow(lm[0].y - lm[9].y, 2)
+    );
+
+    // 映射目标旋转角：手掌左右移动 → 水平旋转（增大范围，更灵敏）
+    targetRotY = palmX * Math.PI * 0.9;   // 左右各约 ±162°
+    targetRotX = palmY * Math.PI * 0.45;  // 上下各约 ±81°
+
+    // 手越大（离镜头越近）→ 字形放大；手越小 → 缩小
+    // handSize 通常在 0.05 ~ 0.3 之间
+    targetScale = 0.6 + handSize * 4;     // 映射到约 0.8 ~ 1.8 倍
+    targetScale = Math.max(0.5, Math.min(2.0, targetScale));
+
+    // 更新状态 UI
+    if (isPinched) {
+      statusDot.className = 'status-dot dot-green';
+      statusText.textContent = '捏合凝聚中';
+    } else {
+      statusDot.className = 'status-dot dot-yellow';
+      statusText.textContent = '张开手掌 · 星空模式';
+    }
+  } else {
+    // 手移出画面：只更新状态，造型切换统一由 animate 循环的超时检测处理
+    handDetected = false;
+    isPinched = false;
+    statusDot.className = 'status-dot dot-red';
+    statusText.textContent = '未检测到手';
+  }
+}
+
+// 初始化手势识别
+async function initHands() {
+  try {
+    const hands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`
+    });
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.5
+    });
+    hands.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+      onFrame: async () => {
+        if (recognitionEnabled) {
+          try {
+            await hands.send({ image: videoElement });
+          } catch (e) {
+            // 忽略单帧错误，避免整个 Camera 停止
+            console.warn('单帧检测失败:', e);
+          }
+        }
+      },
+      width: 640,
+      height: 480
+    });
+    await camera.start();
+    statusDot.className = 'status-dot dot-yellow';
+    statusText.textContent = '摄像头已开启 · 请将手放入画面';
+  } catch (err) {
+    console.error('手势初始化失败:', err);
+    statusDot.className = 'status-dot dot-red';
+    statusText.textContent = '摄像头启动失败';
+  }
+}
+
+// 三个造型切换按钮：点哪个就直接切到哪个
+function switchToShape(index) {
+  currentShapeIndex = index;
+  const newShapePoints = shapes[index];
+  for (let i = 0; i < TOTAL_COUNT; i++) {
+    const target = newShapePoints[i];
+    // 防御：即便某个造型点数不足，也不让整个循环抛异常中断
+    if (target) particles[i].text.copy(target);
+    // 切换时给一个小的随机速度，强制触发动画
+    particles[i].vel.x += (Math.random() - 0.5) * 0.1;
+    particles[i].vel.y += (Math.random() - 0.5) * 0.1;
+    particles[i].vel.z += (Math.random() - 0.5) * 0.1;
+  }
+}
+
+document.getElementById('btn0').addEventListener('click', () => switchToShape(0));
+document.getElementById('btn1').addEventListener('click', () => switchToShape(1));
+document.getElementById('btn2').addEventListener('click', () => switchToShape(2));
+document.getElementById('btn3').addEventListener('click', () => switchToShape(3));
+
+// 延迟启动，确保 Three.js 先渲染
+setTimeout(initHands, 200);
+</script>
+</body>
+</html>
+
+
