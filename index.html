@@ -8,11 +8,16 @@
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230a0e1a'/%3E%3Ccircle cx='20' cy='24' r='3' fill='%238ab4f8'/%3E%3Ccircle cx='40' cy='32' r='4' fill='%23b388ff'/%3E%3Ccircle cx='32' cy='44' r='2' fill='%237c4dff'/%3E%3C/svg%3E" />
   <!-- 已移除 Tailwind CSS v3：页面样式全部是内联 style / <style>，没有任何 Tailwind 类名，
        保留它只会多一次网络请求（失败时还会在控制台留下报错）。 -->
+  <!-- 资源全部走 registry.npmmirror.com（阿里云 npm 镜像）：
+       原先用的是 cdn.jsdelivr.net，但实测在国内网络下，MediaPipe 那个 4.3MB 的
+       hands_solution_packed_assets.data 根本下不完（25 秒超时），
+       导致手势模型初始化失败、界面只显示"未检测到手"。
+       换成 npmmirror 后同一文件 4 秒下完，CORS 与 wasm MIME 类型也都正常。 -->
   <!-- Three.js 3D 渲染引擎（r128 稳定 UMD 版，全局 THREE 可用） -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://registry.npmmirror.com/three/0.128.0/files/build/three.min.js"></script>
   <!-- MediaPipe Hands 手势识别 -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://registry.npmmirror.com/@mediapipe/hands/0.4.1675469240/files/hands.js" crossorigin="anonymous"></script>
+  <script src="https://registry.npmmirror.com/@mediapipe/camera_utils/0.3.1675466862/files/camera_utils.js" crossorigin="anonymous"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
@@ -778,6 +783,12 @@ let lastHandDetectedTime = 0;   // 最后一次收到手势检测结果的时间
 let palmX = 0, palmY = 0;        // 手掌归一化坐标 [-1, 1]
 let handSize = 0.2;              // 手的大小（手腕到中指根距离，用于判断远近）
 let recognitionEnabled = true;
+let sendFailCount = 0;      // hands.send 连续失败次数
+let handsError = '';        // 最近一次手势模型的错误信息
+let cameraStartedAt = 0;    // 摄像头启动成功的时间戳
+let handsInitAt = 0;        // initHands 开始的时间戳（用于判断启动超时）
+let initError = '';         // 摄像头/模型初始化抛出的错误
+let resultsCount = 0;       // onResults 被调用的次数（判断模型是否真的在出结果）
 
 // 目标旋转角（由手掌位置控制）
 let targetRotY = 0;
@@ -880,8 +891,29 @@ function animate() {
 
   // (c3) 每帧根据实际状态更新 UI（避免状态卡在旧值）
   // 状态栏显示：手势状态 + 当前是第几个造型
+  // 出错时优先显示错误原因，否则"未检测到手"会把真实问题盖住
   const shapeInfo = `造型${currentShapeIndex + 1}/${SHAPE_NAMES.length}`;
-  if (!handDetected) {
+  if (initError) {
+    // 初始化失败必须最优先显示，否则会被后面几档状态盖掉
+    statusDot.className = 'status-dot dot-red';
+    statusText.textContent = `摄像头启动失败: ${initError.slice(0, 60)}`;
+  } else if (handsError) {
+    statusDot.className = 'status-dot dot-red';
+    statusText.textContent = `手势模型报错: ${handsError.slice(0, 70)}`;
+  } else if (!cameraStartedAt) {
+    const waited = handsInitAt ? Date.now() - handsInitAt : 0;
+    if (waited > 8000) {
+      // 超过 8 秒还拿不到摄像头：多半是权限没给、或被别的程序占用
+      statusDot.className = 'status-dot dot-red';
+      statusText.textContent = '摄像头启动超时 · 检查权限，或关掉占用摄像头的程序';
+    } else {
+      statusText.textContent = `摄像头启动中… · ${shapeInfo}`;
+    }
+  } else if (resultsCount === 0 && Date.now() - cameraStartedAt > 4000) {
+    // 摄像头开了、却一次结果都没返回 —— 模型没跑起来（通常是模型文件没下完）
+    statusDot.className = 'status-dot dot-red';
+    statusText.textContent = '模型无响应（资源未加载？）· 检查网络后刷新';
+  } else if (!handDetected) {
     statusText.textContent = `未检测到手 · ${shapeInfo}`;
   } else if (isPinched) {
     statusText.textContent = `捏合凝聚中 · ${shapeInfo}`;
@@ -989,6 +1021,7 @@ const PINCH_THRESHOLD = 0.05; // 捏合判定阈值（归一化距离）
 
 function onResults(results) {
   if (!recognitionEnabled) return;
+  resultsCount++;   // 记录模型确实返回过结果
 
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
     handDetected = true;
@@ -1046,9 +1079,11 @@ function onResults(results) {
 
 // 初始化手势识别
 async function initHands() {
+  handsInitAt = Date.now();
+  initError = '';
   try {
     const hands = new Hands({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`
+      locateFile: (file) => `https://registry.npmmirror.com/@mediapipe/hands/0.4.1675469240/files/${file}`
     });
     hands.setOptions({
       maxNumHands: 1,
@@ -1063,9 +1098,17 @@ async function initHands() {
         if (recognitionEnabled) {
           try {
             await hands.send({ image: videoElement });
+            sendFailCount = 0;
+            if (handsError) handsError = '';
           } catch (e) {
-            // 忽略单帧错误，避免整个 Camera 停止
-            console.warn('单帧检测失败:', e);
+            // 不中断 Camera，但要留下痕迹：
+            // 之前这里只 console.warn，界面上永远显示"未检测到手"，
+            // 无法区分"模型没加载成功"和"画面里确实没有手"
+            sendFailCount++;
+            handsError = (e && e.message) ? e.message : String(e);
+            if (sendFailCount === 1 || sendFailCount % 60 === 0) {
+              console.warn(`单帧检测失败 (第 ${sendFailCount} 次):`, e);
+            }
           }
         }
       },
@@ -1073,11 +1116,13 @@ async function initHands() {
       height: 480
     });
     await camera.start();
+    cameraStartedAt = Date.now();
     statusDot.className = 'status-dot dot-yellow';
     statusText.textContent = '摄像头已开启 · 请将手放入画面';
   } catch (err) {
     console.error('手势初始化失败:', err);
     statusDot.className = 'status-dot dot-red';
+    initError = (err && err.message) ? err.message : String(err);
     statusText.textContent = '摄像头启动失败';
   }
 }
@@ -1107,5 +1152,7 @@ setTimeout(initHands, 200);
 </script>
 </body>
 </html>
+
+
 
 
