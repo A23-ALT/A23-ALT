@@ -265,64 +265,68 @@ function sampleTextPoints(text, totalPoints) {
 // 采样文字点云
 const textPoints = sampleTextPoints(CONFIG.textContent, TOTAL_COUNT);
 
-/**
- * 造型1：多层花瓣花（玫瑰式花冠）
+﻿/**
+ * 造型1：一支玫瑰
  *
- * 前面几版失败的原因：花瓣被做成"环形扇区"，相邻花瓣首尾相接，
- * 拼起来必然变成一个连续圆盘，怎么调都不像花。
+ * 由四部分组成，从下往上看：花柄（带两片叶）→ 花萼 → 花头。
  *
- * 这一版改用最容易被认成"花"的图形语言：
- *   1. 一个明显的花心（致密小丘）
- *   2. 三圈**彼此独立**的花瓣，每片是单独的泪滴形，瓣与瓣之间留空隙
- *   3. 外圈花瓣长而平，内圈花瓣短而向前翘起，形成层次和立体感
+ *   花头：仍然用"花心 + 三圈独立花瓣"的布局（正面朝向观察者，
+ *         这是最容易认出是花的角度），三层花瓣自内向外变大、逐层外翻。
+ *   花萼：花柄顶端 5 片向下外张的小尖片，把花头和花柄连起来。
+ *   花柄：从底部切口一直升到花萼，略有 S 形弯曲，下粗上细。
+ *   叶片：两片，一左一右错开高度，披针形，尖端微微下垂。
  *
- * 每片花瓣在自己的局部坐标里采样：
- *   u ∈ [0,1] 沿花瓣轴向（根部→尖端）
- *   v ∈ [-1,1] 垂直花瓣轴向
+ * 坐标：x 横向、y 纵向（上为正）、z 深度（正 z 朝向观察者）。
  */
 function sampleRosePoints(totalPoints) {
   const points = [];
+  const push = (x, y, z) => points.push(new THREE.Vector3(x, y, z));
 
-  /* ===== 1. 花心：致密小丘 ===== */
-  const centerCount = Math.floor(totalPoints * 0.16);
+  /* ---------- 关键尺寸 ---------- */
+  const BLOOM_Y = 0.95;        // 花头中心高度
+  const BLOOM_SCALE = 1.02;    // 花头整体缩放
+  const STEM_TOP = 0.34;       // 花柄顶端（接花萼处）
+  const STEM_BOTTOM = -1.62;   // 花柄底端（剪切口）
+
+  /* ---------- 粒子分配 ---------- */
+  const nBloom = Math.floor(totalPoints * 0.58);
+  const nStem  = Math.floor(totalPoints * 0.09);
+  const nLeaf  = Math.floor(totalPoints * 0.14);
+  const nCalyx = totalPoints - nBloom - nStem - nLeaf;
+
+  const halfScale = CONFIG.roseHalfScale || 1;
+
+  /* ================= 1. 花头：花心 ================= */
+  const centerCount = Math.floor(nBloom * 0.16);
+  const centerR = 0.17 * BLOOM_SCALE;
   for (let i = 0; i < centerCount; i++) {
-    const rr = 0.17 * Math.sqrt(Math.random());
+    const rr = centerR * Math.sqrt(Math.random());
     const ang = Math.random() * Math.PI * 2;
-    // 中间高、边缘低的小丘
-    const z = 0.20 * Math.sqrt(Math.max(0, 1 - (rr / 0.17) * (rr / 0.17)));
-    points.push(new THREE.Vector3(
-      Math.cos(ang) * rr,
-      Math.sin(ang) * rr,
-      z + (Math.random() - 0.5) * 0.015
-    ));
+    const k = 1 - (rr / centerR) * (rr / centerR);
+    const z = 0.20 * BLOOM_SCALE * Math.sqrt(Math.max(0, k));
+    push(Math.cos(ang) * rr, BLOOM_Y + Math.sin(ang) * rr, z + (Math.random() - 0.5) * 0.015);
   }
 
-  /* ===== 2. 三圈花瓣 =====
-   * n 片数 / Rb 根部半径 / L 长度 / W 半宽 / z0 抬起高度 / ph 相位
+  /* ================= 2. 花头：三圈花瓣 =================
+   * n 片数 / Rb 根部半径 / L 长度 / W 半宽 / z0 抬起 / tz 沿瓣倾斜 / ph 相位
    */
   const RINGS = [
-    { n: 12, Rb: 0.30, L: 0.66, W: 0.20, z0: 0.00, tz: -0.12, ph: 0.00 }, // 外圈：长而平，尖端略后仰
-    { n: 10, Rb: 0.21, L: 0.50, W: 0.17, z0: 0.09, tz: 0.06, ph: 0.31 },  // 中圈
-    { n: 8,  Rb: 0.13, L: 0.34, W: 0.13, z0: 0.17, tz: 0.16, ph: 0.62 },  // 内圈：短而向前翘
+    { n: 11, Rb: 0.30, L: 0.58, W: 0.27, z0: 0.00, tz: -0.10, ph: 0.00 },
+    { n: 9,  Rb: 0.21, L: 0.46, W: 0.23, z0: 0.09, tz: 0.06, ph: 0.31 },
+    { n: 7,  Rb: 0.13, L: 0.32, W: 0.17, z0: 0.17, tz: 0.16, ph: 0.62 },
   ];
-
   const totalPetals = RINGS.reduce((a, R) => a + R.n, 0);
-  const petalBudget = totalPoints - centerCount;
-  const perPetal = Math.floor(petalBudget / totalPetals);
+  const perPetal = Math.floor((nBloom - centerCount) / totalPetals);
 
   for (const ring of RINGS) {
     for (let p = 0; p < ring.n; p++) {
       const theta = (p / ring.n) * Math.PI * 2 + ring.ph;
-
-      // 花瓣轴向与垂直方向
       const ax = Math.cos(theta), ay = Math.sin(theta);
       const px = -Math.sin(theta), py = Math.cos(theta);
 
-      // 每片的个体差异
       const L = ring.L * (0.92 + Math.random() * 0.16);
-      const W = ring.W * (0.92 + Math.random() * 0.16);
+      const W = ring.W * (0.92 + Math.random() * 0.16) * halfScale;
 
-      // 根部位置
       const bx = ax * ring.Rb;
       const by = ay * ring.Rb;
 
@@ -330,21 +334,104 @@ function sampleRosePoints(totalPoints) {
         const u = Math.random();
         const v = Math.random() * 2 - 1;
 
-        // 宽度轮廓：根部窄、中段宽、尖端圆钝（不收成尖）
+        // 宽度轮廓：根部窄、中段宽、尖端圆钝
         const w = Math.pow(Math.sin(Math.PI * Math.pow(u, 0.62)), 0.45);
 
-        // 沿花瓣轴向伸展，横向按宽度展开
-        const x = bx + ax * (L * u) + px * (W * w * v);
-        const y = by + ay * (L * u) + py * (W * w * v);
+        // 花瓣局部坐标（以花头中心为原点）
+        const lx = bx + ax * (L * u) + px * (W * w * v);
+        const ly = by + ay * (L * u) + py * (W * w * v);
 
-        // 深度：整圈抬起 + 沿花瓣轴向的倾斜 + 少量抖动
-        const z = ring.z0
-                + ring.tz * u
-                + (Math.random() - 0.5) * 0.015;
+        // 深度：整圈抬起 + 沿花瓣轴向倾斜
+        const lz = ring.z0 + ring.tz * u + (Math.random() - 0.5) * 0.015;
 
-        points.push(new THREE.Vector3(x, y, z));
+        push(lx * BLOOM_SCALE, BLOOM_Y + ly * BLOOM_SCALE, lz * BLOOM_SCALE);
       }
     }
+  }
+
+  /* ================= 3. 花萼：5 片向下外张的小尖片 ================= */
+  const SEPAL_N = 5;
+  const perSepal = Math.max(1, Math.floor(nCalyx / SEPAL_N));
+  for (let s = 0; s < SEPAL_N; s++) {
+    const th = (s / SEPAL_N) * Math.PI * 2 + 0.4;
+    for (let i = 0; i < perSepal; i++) {
+      const u = Math.random();
+      const v = Math.random() * 2 - 1;
+      const w = Math.sin(Math.PI * Math.pow(u, 0.9));
+      const r = (0.05 + 0.20 * u) * BLOOM_SCALE;
+      const y = STEM_TOP + 0.10 - 0.30 * Math.pow(u, 1.35);
+      const dx = Math.cos(th) * r, dz = Math.sin(th) * r;
+      push(dx + Math.cos(th + Math.PI / 2) * v * 0.045 * w,
+           y + Math.abs(v) * 0.015,
+           dz + Math.sin(th + Math.PI / 2) * v * 0.045 * w);
+    }
+  }
+
+  /* ================= 4. 花柄：略带 S 形弯曲 ================= */
+  for (let i = 0; i < nStem; i++) {
+    const t = Math.random();                       // 0=底 1=顶
+    const y = STEM_BOTTOM + t * (STEM_TOP - STEM_BOTTOM);
+    // 轻微 S 形：底部向右、上部回正
+    const cx = 0.055 * Math.sin(t * Math.PI * 0.85) - 0.015;
+    const r = 0.052 - 0.020 * t;                   // 下粗上细
+    const a = Math.random() * Math.PI * 2;
+    const rr = r * Math.sqrt(Math.random());
+    push(cx + Math.cos(a) * rr, y, Math.sin(a) * rr);
+  }
+
+  /* ================= 5. 两片叶 =================
+   * 披针形：根部窄、中部宽、尖端收拢，末端轻微下垂。
+   */
+  function leaf(attachT, angle, len, halfW, count) {
+    // 叶片长在花柄的这个高度上
+    const stemY = STEM_BOTTOM + attachT * (STEM_TOP - STEM_BOTTOM);
+    const stemX = 0.055 * Math.sin(attachT * Math.PI * 0.85) - 0.015;
+
+    const ax = Math.cos(angle), ay = Math.sin(angle);
+    const px = -Math.sin(angle), py = Math.cos(angle);
+
+    for (let i = 0; i < count; i++) {
+      const u = Math.random();
+      const v = Math.random() * 2 - 1;
+
+      // 披针形宽度
+      const w = Math.pow(Math.sin(Math.PI * Math.pow(u, 0.70)), 0.55) * halfW;
+
+      // 尖端下垂
+      const droop = -0.34 * Math.pow(u, 2.0) * len;
+
+      const x = stemX + ax * (len * u) + px * (w * v);
+      const y = stemY + ay * (len * u) + py * (w * v) + droop;
+      // 叶片略向观察者方向翘起，避免完全贴在平面上
+      const z = 0.06 * Math.sin(Math.PI * u) + (Math.random() - 0.5) * 0.02;
+
+      push(x, y, z);
+    }
+  }
+
+  // 上一片朝左上，下一片朝右上，错开高度
+  leaf(0.78, Math.PI * 0.83, 1.20, 0.165, Math.floor(nLeaf * 0.5));
+  leaf(0.44, Math.PI * 0.17, 1.08, 0.155, nLeaf - Math.floor(nLeaf * 0.5));
+
+  /* ================= 6. 收进画面 =================
+   * 按页面真实相机参数（fov 60、相机 z=4、宽高比 1414/760）做投影检查。
+   */
+  const TAN_HALF = Math.tan((60 * Math.PI) / 360);
+  const CAM_Z = 4;
+  const ASPECT = 1414 / 760;
+  let maxNdc = 0;
+  for (const q of points) {
+    const d = CAM_Z - q.z;
+    if (d <= 0.2) continue;
+    const ndc = Math.max(
+      Math.abs(q.y / (TAN_HALF * d)),
+      Math.abs(q.x / (TAN_HALF * d * ASPECT))
+    );
+    if (ndc > maxNdc) maxNdc = ndc;
+  }
+  if (maxNdc > 0.92) {
+    const k = 0.92 / maxNdc;
+    for (const q of points) { q.x *= k; q.y *= k; q.z *= k; }
   }
 
   return points;
