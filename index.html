@@ -131,6 +131,16 @@
       cursor: pointer;
       backdrop-filter: blur(10px);
     ">爱心</button>
+    <button id="btn4" style="
+      padding: 8px 12px;
+      border-radius: 16px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      color: rgba(255,255,255,0.9);
+      font-size: 13px;
+      cursor: pointer;
+      backdrop-filter: blur(10px);
+    ">影子</button>
   </div>
 
   <!-- 顶部极简提示条 -->
@@ -766,15 +776,178 @@ function normalizeShapePoints(pointsArr, totalPoints) {
   return out;
 }
 
+/**
+ * 造型4：双人剪影
+ *
+ * 轮廓来自一张夜里的合影——两个人站在路灯下，影子投在彩色砖路上。
+ * 做法：把照片里的影子提取成一张 220×184 的二值位图（已裁掉四周杂物、填平内部空洞），
+ * 以 base64 内嵌在页面里；运行时解码成位图，再在轮廓内撒点。
+ *
+ * 采样时区分"内部"和"边缘"两类像素：
+ *   内部点负责填充体积，边缘点负责把轮廓勾清楚，
+ * 两者按比例取（约 62% / 38%），剪影才不会糊成一团。
+ * 剪影本身是平的，只给很薄的 z 抖动，旋转时既有体积感又不失真。
+ */
+function sampleShadowPoints(totalPoints) {
+  const W = 220;
+  const H = 184;
+
+  /* 二值位图（行优先，每像素 1 位，高位在前），由照片提取后编码 */
+  const B64 =
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB/gAAAAAAAAAAAAAAAAAAA" +
+    "AAAAAAAAAAAAAAAf/gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD//gAAAAAAAAAAAAAAAAAAAAA" +
+    "AAHwAAAAAAAAP//AAAAAAAAAAAAAAAAAAAAAAAH/4AAAAAAAB///AAAAAAAAAAAAAAAAAAAAAAH/" +
+    "/4AAAAAAAH//+AAAAAAAAAAAAAAAAAAAAAAf//wAAAAAAA///8AAAAAAAAAAAAAAAAAAAAAD///w" +
+    "AAAAAAD///4AAAAAAAAAAAAAAAAAAAAAf///gAAAAAAP///wAAAAAAAAAAAAAAAAAAAAD///+AAA" +
+    "AAAA////gAAAAAAAAAAAAAAAAAAAAf///8AAAAAAD///+AAAAAAAAAAAAAAAAAAAAD////wAAAAA" +
+    "AP///8AAAAAAAAAAAAAAAAAAAAf////AAAAAAA////4AAAAAAAAAAAAAAAAAAAB////+AAAAAAD/" +
+    "///wAAAAAAAAAAAAAAAAAAAH////4AAAAAAP////gAAAAAAAAAAAAAAAAAAAf////gAAAAAAf///" +
+    "+AAAAAAAAAAAAAAAAAAAB////+AAAAAAB////8AAAAAAAAAAAAAAAAAAAH////4AAAAAAH////gA" +
+    "AAAAAAAAAAAAAAAAAAf////gAAAAAAf///+AAAAAAAAAAAAAAAAAAAB////8AAAAAAA////4AAAA" +
+    "AAAAAAAAAAAAAAAH////wAAAAAAD////gAAAAAAAAAAAAAAAAAAAP////AAAAAAAH///+AAAAAAA" +
+    "AAAAAAAAAAAAA////8AAAAAAAP///gAAAAAAAAAAAAAAAAAAAD////gAAAAAAAf//+AAAAAAAAAA" +
+    "AAAAAAAAAAP///+AAAAAAABn//4AAAAAAAAAAAAAAAAAAAA////4AHwAAAABf//gAAAAAAAAAAAA" +
+    "AAAAAAAD///////gAAAAA//+AAAAAAAAAAAAAAAAAAAAH///////AAAAAB//4AAAAAAAAAAAAAAA" +
+    "AAAAAf//////8AAAAAD//gAAAAAAAAAAAAAAAAAAAB///////4AAAAAP//AAAAAAAAAAAAAAAAAA" +
+    "AAD///////wAAAAA//8AAAAAAAAAAAAAAAAAAAAH///////AAAAAD//wAAAAAAAAAAAAAAAAAAAA" +
+    "P//////8AAAAAP//gAAAAAAAAAAAAAAAAAAAAf//////wAAAAA//+AAAAAAAAAAAAAAAAAAAAB//" +
+    "/////AAAAAD//8AAAAAAAAAAAAAAAAAAAAH//////8AAAAAP//4AAAAAAAAAAAAAAAAAAAAf////" +
+    "//wAAAAB///wAAAAAAAAAAAAAAAAAAAD///////AAAAAH///AAAAAAAAAAAAAAAAAAAAP//////8" +
+    "AAAAAf//+AAAAAAAAAAAAAAAAAAAA///////4AAAAD///+AAAAAAAAAAAAAAAAAAAD///////gAA" +
+    "AAP///8AAAAAAAAAAAAAAAAAAAf//////+AAAAA////8AAAAAAAAAAAAAAAAAAD///////4AAAAD" +
+    "////+AAAAAAAAAAAAAAAAAAf///////wAAAAf//////wAAAAAAAAAAAAAAAH////////AAAAB///" +
+    "////8AAAAAAAAAAAAAAB////////8AAAAH///////8AAAAAAAAAAAAAD/////////4AAAA//////" +
+    "//4AAAAAAAAAAAAB//////////gAAAH////////wAAAAAAAAAAAA///////////AAAB/////////" +
+    "wAAAAAAAAAAAP//////////8AAB//////////gAAAAAAAAAAB///////////wAAP/////////+AA" +
+    "AAAAAAAAAP///////////gAB//////////8AAAAAAAAAAB////////////AAP//////////wAAAA" +
+    "AAAAAAP///////////8AA///////////gAAAAAAAAAB////////////4AD///////////AAAAAAA" +
+    "AAAP////////////wAf//////////+AAAAAAAAAA/////////////AB///////////4AAAAAAAAA" +
+    "H////////////+AH///////////wAAAAAAAAA/////////////8A////////////gAAAAAAAAD//" +
+    "///////////wD////////////AAAAAAAAAP/////////////gP///////////+AAAAAAAAB/////" +
+    "////////+Af///////////8AAAAAAAAH/////////////8D////////////wAAAAAAAAf///////" +
+    "//////4H////////////gAAAAAAAD//////////////wf////////////AAAAAAAAP//////////" +
+    "////B////////////8AAAAAAAA//////////////+H////////////4AAAAAAAH/////////////" +
+    "/4f////////////wAAAAAAAf//////////////x/////////////gAAAAAAB///////////////H" +
+    "////////////+AAAAAAAP//////////////+f////////////8AAAAAAA///////////////9///" +
+    "//////////4AAAAAAD///////////////3/////////////gAAAAAAP/////////////////////" +
+    "////////AAAAAAB/////////////////////////////8AAAAAAH////////////////////////" +
+    "/////4AAAAAAf/////////////////////////////wAAAAAD///////////////////////////" +
+    "///AAAAAAP/////////////////////////////+AAAAAA//////////////////////////////" +
+    "8AAAAAD//////////////////////////////4AAAAAf//////////////////////////////wA" +
+    "AAAB///////////////////////////////gAAAAH//////////////////////////////+AAAA" +
+    "A///////////////////////////////8AAAAD///////////////////////////////4AAAAP/" +
+    "//////////////////////////////gAAAB//////////////////////////////38AAAAD////" +
+    "//////////////////////////HwAAAAD/////////////P///////////////8AAAAAAP//////" +
+    "//////8f///////////////4AAAAAA/////////////x////////////////gAAAAAD/////////" +
+    "////H///////////////+AAAAAAP////////////8P///////////////4AAAAAA////////////" +
+    "/wf/n/////////////gAAAAAH/////////////B/+f////////////+AAAAAAf////////////+D" +
+    "/5/////////////4AAAAAB/////////////4H+H/////////////gAAAAAH/////////////gDgf" +
+    "////////////+AAAAAAf////////////+AAB/////////////8AAAAAB/////////////4AAD///" +
+    "//////////wAAAAAH/////////////gAAH/////////////gAAAAA/////////////+AAAAP////" +
+    "///////+AAAAAD/////////////8AAAAAH//////////8AAAAAP/////////////wAAAAAP/////" +
+    "/////wAAAAB//////////////AAAAAA///////////gAAAAH/////////////8AAAAAD////////" +
+    "//+AAAAA//////////////wAAAAAH//////////8AAAAD//////////////gAAAAAf//////////" +
+    "wAAAAP/////////////+AAAAAA///////////gAAAA//////////////4AAAAAD///////////AA" +
+    "AAD//////////////gAAAAAP//////////8AAAAP//////////////AAAAAAf//////////4AAAA" +
+    "//////////////8AAAAAB///////////gAAAD//////////////wAAAAAH///////////AAAAP//" +
+    "////////////gAAAAAP//////////+AAAA//////////////+AAAAAA///////////4AAAD/////" +
+    "/////////4AAAAAD///////////wAAAP//////////////wAAAAAH///////////gAAA////////" +
+    "///////AAAAAAf//////////+AAAD//////////////8AAAAAB///////////8AAAP//////////" +
+    "////4AAAAAD///////////wAAA///////////////gAAAAAP///////////gAAD/////////////" +
+    "/+AAAAAA////////////AAAP//////////////4AAAAAB///////////8AAA/9/////////////w" +
+    "AAAAAH///////////4AAD/3/////////////AAAAAAf///////////wAAP+f////////////8AAA" +
+    "AAB////////////gAA/5/////////////wAAAAAD///////////+AAD/n/////////////AAAAAA" +
+    "P///////////8AAP+f////////////+AAAAAAf///////////4AA/5/////////////4AAAAAB//" +
+    "//////////wAD/P/////////////gAAAAAH////////////AAP8/////////////+AAAAAAP////" +
+    "///////+AA/z/////////////4AAAAAA////////////8AD/P/////////////gAAAAAD///////" +
+    "/////wAP8/////////////+AAAAAAP////////////gA/z/////////////8AAAAAAf/////////" +
+    "///AD/P/////////////wAAAAAB////////////8AP4//////////////AAAAAAD////////////" +
+    "4A/j/////////////8AAAAAAP////////////wD+P/////////////4AAAAAA/////////////AP" +
+    "4//////////////gAAAAAD////////////+A/D/////////////+AAAAAAH////////////8D8P/" +
+    "////////////8AAAAAAf////////////wPw//////////////wAAAAAB/////////////g/D////" +
+    "//////////AAAAAAD/////////////D4P/////////////+AAAAAAP////////////8Pg///////" +
+    "///////4AAAAAA/////////////4+D//////////////gAAAAAB/////////////z4P/////////" +
+    "////+AAAAAAH/////////////vA//////////////8AAAAAAf////////////+8D////////////" +
+    "//wAAAAAB//////////////wf//////////////AAAAAAH//////////////B//////////////+" +
+    "AAAAAAP/////////////4H//////////////4AAAAAA//////////////gf//////////////gAA" +
+    "AAAD/////////////+B//////////////+AAAAAAH/////////////4H//////////////8AAAAA" +
+    "Af/////////////gf//////////////wAAAAAB/////////////8B///////////////AAAAAAD/" +
+    "////////////wH//////////////8AAAAAAP/////////////Af//////////////wAAAAAAf///" +
+    "/////////8B///////////////gAAAAAB/////////////gH//////////////+AAAAAAH//////" +
+    "//////+Af//////////////4AAAAAAP////////////4D///////////////gAAAAAA/////////" +
+    "////gP//////////////+AAAAAAD////////////8A///////////////8AAAAAAP///////////" +
+    "/wD///////////////wAAAAAAf////////////AP///////////////AAAAAAB////////////8A" +
+    "///////////////8AAAAAAD////////////wD///////////////4AAAAAAP////////////AP//" +
+    "/////////////gAAAAAA////////////8A///////////////+AAAAAAB////////////wD/////" +
+    "//////////4AAAAAAD////////////AP///////////////gAAAAAAP///////////8A////////" +
+    "////////AAAAAAAf///////////wD///////////////8AAAAAAB////////////Af//////////" +
+    "/////wAAAAAAD///////////8B////////////////AAAAAAAP///////////wH/////////////" +
+    "//+AAAAAAAf///////////Af///////////////4AAAAAAB///////////8=";
+
+  /* ---- 解码位图 ---- */
+  const bin = atob(B64);
+  const bits = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    const byte = bin.charCodeAt(i >> 3);
+    bits[i] = (byte >> (7 - (i & 7))) & 1;
+  }
+
+  /* ---- 分出内部像素与边缘像素 ---- */
+  const inside = [];
+  const edge = [];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (!bits[i]) continue;
+      inside.push(i);
+      const up = y > 0 ? bits[i - W] : 0;
+      const dn = y < H - 1 ? bits[i + W] : 0;
+      const lf = x > 0 ? bits[i - 1] : 0;
+      const rt = x < W - 1 ? bits[i + 1] : 0;
+      if (!up || !dn || !lf || !rt) edge.push(i);
+    }
+  }
+
+  /* ---- 撒点 ---- */
+  const scale = 2.85 / H;        // 世界坐标高度约 2.85
+  const cx = W / 2;
+  const cy = H / 2;
+  const EDGE_RATIO = 0.38;       // 边缘点占比
+
+  const points = [];
+  for (let n = 0; n < totalPoints; n++) {
+    const useEdge = Math.random() < EDGE_RATIO && edge.length > 0;
+    const arr = useEdge ? edge : inside;
+    const i = arr[(Math.random() * arr.length) | 0];
+    const px = i % W;
+    const py = (i / W) | 0;
+
+    // 亚像素抖动，避免点到网格上显得方块化
+    const jx = (Math.random() - 0.5) * 0.9;
+    const jy = (Math.random() - 0.5) * 0.9;
+
+    const wx = (px + jx - cx) * scale;
+    const wy = (cy - (py + jy)) * scale;
+    const wz = (Math.random() - 0.5) * 0.22;   // 极薄的一层厚度
+
+    points.push(new THREE.Vector3(wx, wy, wz));
+  }
+
+  return points;
+}
+
 // 四个造型的点云数组（造型0=镓榆文字, 造型1=玫瑰花束, 造型2=古老花树, 造型3=立体爱心）
+// 统一补齐到 TOTAL_COUNT，避免切换造型时索引越界
+// 五个造型：文字 / 玫瑰 / 樱花树 / 爱心 / 双人剪影
 // 统一补齐到 TOTAL_COUNT，避免切换造型时索引越界
 const shapes = [
   textPoints,
   sampleRosePoints(TOTAL_COUNT),
   sampleTreePoints(TOTAL_COUNT),
   sampleHeartPoints(TOTAL_COUNT),
+  sampleShadowPoints(TOTAL_COUNT),
 ].map((arr) => normalizeShapePoints(arr, TOTAL_COUNT));
-const SHAPE_NAMES = ['镓榆文字', '玫瑰花束', '古老花树', '立体爱心'];
+const SHAPE_NAMES = ['镓榆文字', '玫瑰花束', '古老花树', '立体爱心', '双人剪影'];
 
 /* ---------- 4. 生成粒子数据 ---------- */
 // 每个粒子：星空位置(home) + 文字位置(text) + 当前速度 + 基础漂浮参数
@@ -1214,7 +1387,7 @@ async function initHands() {
   }
 }
 
-// 三个造型切换按钮：点哪个就直接切到哪个
+// 造型切换按钮：点哪个就直接切到哪个
 function switchToShape(index) {
   currentShapeIndex = index;
   const newShapePoints = shapes[index];
@@ -1233,6 +1406,7 @@ document.getElementById('btn0').addEventListener('click', () => switchToShape(0)
 document.getElementById('btn1').addEventListener('click', () => switchToShape(1));
 document.getElementById('btn2').addEventListener('click', () => switchToShape(2));
 document.getElementById('btn3').addEventListener('click', () => switchToShape(3));
+document.getElementById('btn4').addEventListener('click', () => switchToShape(4));
 
 // 延迟启动，确保 Three.js 先渲染
 setTimeout(initHands, 200);
